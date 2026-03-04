@@ -125,6 +125,9 @@ HTTP backend contract:
 - Resolver `POST`s approval request to: `POST {baseUrl}/v1/approvals`
 - Resolver polls status at: `GET {baseUrl}/v1/approvals/{requestId}`
 - Auth via env: `HWVAULT_SECOND_FACTOR_HTTP_BEARER`
+- `https://` is required by default for `secondFactorHttpUrl`
+  - opt-out only with `allowInsecureSecondFactorHttp: true`
+  - or env `HWVAULT_ALLOW_INSECURE_SECOND_FACTOR_HTTP=1`
 
 Status response must contain:
 
