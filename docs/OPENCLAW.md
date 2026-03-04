@@ -131,7 +131,9 @@ HTTP backend contract:
 
 Status response must contain:
 
-- `{ "status": "pending" | "approved" | "denied" }`
+- `{ "status": "pending" | "approved" | "denied", "requestId": "...", "action": "...", "secretId": "..." }`
+
+By default, resolver enforces strict binding between poll response metadata and the original request. This can be disabled only for migration/debug using `HWVAULT_DISABLE_STRICT_2FA_BINDING=1`.
 
 Demo backend reference:
 

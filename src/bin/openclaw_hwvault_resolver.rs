@@ -32,6 +32,10 @@ struct ResolverError {
     message: String,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct Policy {
@@ -71,6 +75,9 @@ struct Policy {
     /// Allow insecure (non-HTTPS) second-factor HTTP backend URL.
     #[serde(default)]
     allow_insecure_second_factor_http: bool,
+    /// Require poll response metadata to bind to original request/action/secret.
+    #[serde(default = "default_true")]
+    strict_second_factor_binding: bool,
     /// Default TTL when a hardware trust root is present.
     #[serde(default)]
     default_ttl_seconds: Option<u64>,
@@ -406,6 +413,33 @@ fn run_second_factor_http(policy: &Policy, action: &str, id: &str) -> Result<(),
         let body: serde_json::Value = poll_resp
             .json()
             .map_err(|e| format!("second-factor poll decode failed: {e}"))?;
+
+        let strict_binding = policy.strict_second_factor_binding
+            && !std::env::var("HWVAULT_DISABLE_STRICT_2FA_BINDING")
+                .ok()
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+        if strict_binding {
+            let rid_ok = body
+                .get("requestId")
+                .and_then(|v| v.as_str())
+                .map(|v| v == request_id)
+                .unwrap_or(false);
+            let action_ok = body
+                .get("action")
+                .and_then(|v| v.as_str())
+                .map(|v| v == action)
+                .unwrap_or(false);
+            let secret_ok = body
+                .get("secretId")
+                .and_then(|v| v.as_str())
+                .map(|v| v == id)
+                .unwrap_or(false);
+            if !(rid_ok && action_ok && secret_ok) {
+                return Err("second-factor poll binding mismatch".to_string());
+            }
+        }
+
         match body
             .get("status")
             .and_then(|v| v.as_str())
@@ -457,8 +491,28 @@ fn append_audit(action: &str, id: &str, decision: &str, detail: &str) {
     if ensure_private_dir(&dir).is_err() {
         return;
     }
+    let lock_path = dir.join("openclaw-audit.lock");
     let chain_path = dir.join("openclaw-audit.chain");
     let log_path = dir.join("openclaw-audit.jsonl");
+
+    // Coarse process lock via lock-file create_new; fail closed after bounded retries.
+    let mut lock_acquired = false;
+    for _ in 0..50 {
+        match fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&lock_path)
+        {
+            Ok(_) => {
+                lock_acquired = true;
+                break;
+            }
+            Err(_) => sleep(Duration::from_millis(20)),
+        }
+    }
+    if !lock_acquired {
+        return;
+    }
 
     let prev = fs::read_to_string(&chain_path)
         .ok()
@@ -480,12 +534,13 @@ fn append_audit(action: &str, id: &str, decision: &str, detail: &str) {
     };
 
     if let Ok(line) = serde_json::to_string(&event) {
-        // Append-only write to reduce race/loss risk.
         if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&log_path) {
             let _ = writeln!(f, "{line}");
         }
         let _ = write_private_file(&chain_path, hash.as_bytes());
     }
+
+    let _ = fs::remove_file(lock_path);
 }
 
 fn signing_key_path() -> PathBuf {
