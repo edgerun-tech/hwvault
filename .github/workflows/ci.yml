@@ -1,0 +1,16 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build resolver
+        run: cargo build --release --bin openclaw-hwvault-resolver
+      - name: Test resolver
+        run: cargo test --bin openclaw-hwvault-resolver
