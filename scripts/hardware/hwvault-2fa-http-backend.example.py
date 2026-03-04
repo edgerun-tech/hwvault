@@ -46,8 +46,13 @@ def get_approval(rid):
     check_auth()
     item = STORE.get(rid)
     if not item:
-        return jsonify({"status": "denied"}), 404
-    return jsonify({"status": item["status"]})
+        return jsonify({"status": "denied", "requestId": rid}), 404
+    return jsonify({
+        "status": item["status"],
+        "requestId": rid,
+        "action": item.get("action"),
+        "secretId": item.get("secretId"),
+    })
 
 
 @app.post("/v1/approvals/<rid>/approve")
