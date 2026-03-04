@@ -140,9 +140,13 @@ Demo backend reference:
 Alternative local hook method still supported:
 
 - `secondFactorMethod`: `command`
-- `secondFactorCommand`: `/usr/local/bin/hwvault-second-factor-approve`
+- Preferred structured form:
+  - `secondFactorCommandBin`: `/usr/local/bin/hwvault-second-factor-approve`
+  - `secondFactorCommandArgs`: `["--flag"]`
+- Legacy fallback form:
+  - `secondFactorCommand`: `/usr/local/bin/hwvault-second-factor-approve --flag`
 
-`secondFactorCommand` receives env vars:
+Command-based second-factor receives env vars:
 
 - `HWVAULT_2FA_ACTION` (`resolve` / `delegate-issue` / `delegate-redeem`)
 - `HWVAULT_2FA_SECRET_ID`

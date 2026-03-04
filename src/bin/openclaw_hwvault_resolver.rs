@@ -53,9 +53,15 @@ struct Policy {
     /// Second-factor method. Currently: "command"
     #[serde(default)]
     second_factor_method: Option<String>,
-    /// Command executed for second-factor approval. Exit 0 => approved.
+    /// Legacy single-string command executed for second-factor approval. Exit 0 => approved.
     #[serde(default)]
     second_factor_command: Option<String>,
+    /// Structured second-factor command binary path (preferred over `second_factor_command`).
+    #[serde(default)]
+    second_factor_command_bin: Option<String>,
+    /// Structured second-factor command args.
+    #[serde(default)]
+    second_factor_command_args: Vec<String>,
     /// Base URL for HTTP second-factor backend (e.g. https://2fa.example.com).
     #[serde(default)]
     second_factor_http_url: Option<String>,
@@ -299,18 +305,25 @@ fn requires_second_factor(policy: &Policy, id: &str) -> bool {
 }
 
 fn run_second_factor_command(policy: &Policy, action: &str, id: &str) -> Result<(), String> {
-    let cmdline = if let Some(v) = policy.second_factor_command.as_ref() {
-        v.clone()
-    } else if let Ok(v) = std::env::var("HWVAULT_SECOND_FACTOR_CMD") {
-        v
+    let (bin, args) = if let Some(bin) = policy.second_factor_command_bin.as_ref() {
+        (bin.clone(), policy.second_factor_command_args.clone())
     } else {
-        return Err("second_factor_command not configured".to_string());
+        // Backward-compatible fallback for existing single-string command config.
+        let cmdline = if let Some(v) = policy.second_factor_command.as_ref() {
+            v.clone()
+        } else if let Ok(v) = std::env::var("HWVAULT_SECOND_FACTOR_CMD") {
+            v
+        } else {
+            return Err("second_factor_command not configured".to_string());
+        };
+        let mut parts = cmdline.split_whitespace();
+        let Some(bin) = parts.next() else {
+            return Err("second_factor_command is empty".to_string());
+        };
+        let args: Vec<String> = parts.map(|s| s.to_string()).collect();
+        (bin.to_string(), args)
     };
-    let mut parts = cmdline.split_whitespace();
-    let Some(bin) = parts.next() else {
-        return Err("second_factor_command is empty".to_string());
-    };
-    let args: Vec<String> = parts.map(|s| s.to_string()).collect();
+
     let status = Command::new(bin)
         .args(args)
         .env("HWVAULT_2FA_ACTION", action)

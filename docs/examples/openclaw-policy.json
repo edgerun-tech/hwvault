@@ -15,6 +15,8 @@
   "secondFactorMethod": "http",
   "secondFactorHttpUrl": "https://2fa.example.com",
   "secondFactorTimeoutSeconds": 90,
+  "secondFactorCommandBin": "/usr/local/bin/hwvault-second-factor-approve",
+  "secondFactorCommandArgs": ["--non-interactive"],
   "requireSecondFactorForIds": [
     "github-token-readonly"
   ],
