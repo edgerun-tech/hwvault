@@ -1,0 +1,27 @@
+name: release-artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-release-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build resolver (locked)
+        run: cargo build --release --locked --bin openclaw-hwvault-resolver
+      - name: Generate checksum
+        run: |
+          cd target/release
+          sha256sum openclaw-hwvault-resolver > openclaw-hwvault-resolver.sha256
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hwvault-release-artifacts
+          path: |
+            target/release/openclaw-hwvault-resolver
+            target/release/openclaw-hwvault-resolver.sha256

@@ -12,6 +12,13 @@ Initial scope in this repository:
 
 See `docs/OPENCLAW.md` for configuration details.
 
+Production/security docs:
+
+- `docs/PRODUCTION_READINESS.md`
+- `docs/RELEASE_SIGNING.md`
+- `docs/INCIDENT_RESPONSE.md`
+- `docs/EXTERNAL_SECURITY_REVIEW.md`
+
 ## License
 
 Apache-2.0. See `LICENSE` and `NOTICE`.
