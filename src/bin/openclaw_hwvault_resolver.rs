@@ -1,4 +1,5 @@
 use base64::Engine;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -61,6 +62,9 @@ struct Policy {
     /// Poll timeout for HTTP second-factor backend.
     #[serde(default)]
     second_factor_timeout_seconds: Option<u64>,
+    /// Allow insecure (non-HTTPS) second-factor HTTP backend URL.
+    #[serde(default)]
+    allow_insecure_second_factor_http: bool,
     /// Default TTL when a hardware trust root is present.
     #[serde(default)]
     default_ttl_seconds: Option<u64>,
@@ -120,6 +124,31 @@ fn policy_path() -> PathBuf {
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     PathBuf::from(home).join(".config/hwvault/openclaw-policy.json")
+}
+
+fn ensure_private_dir(path: &Path) -> Result<(), String> {
+    fs::create_dir_all(path).map_err(|e| format!("failed creating state dir: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o700);
+        fs::set_permissions(path, perms).map_err(|e| format!("failed setting dir perms: {e}"))?;
+    }
+    Ok(())
+}
+
+fn write_private_file(path: &Path, content: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        ensure_private_dir(parent)?;
+    }
+    fs::write(path, content).map_err(|e| format!("write failed: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o600);
+        fs::set_permissions(path, perms).map_err(|e| format!("failed setting file perms: {e}"))?;
+    }
+    Ok(())
 }
 
 fn load_policy(path: &Path) -> Policy {
@@ -302,6 +331,15 @@ fn run_second_factor_http(policy: &Policy, action: &str, id: &str) -> Result<(),
         .or_else(|| std::env::var("HWVAULT_SECOND_FACTOR_HTTP_URL").ok())
         .ok_or_else(|| "second_factor_http_url not configured".to_string())?;
 
+    let allow_insecure = policy.allow_insecure_second_factor_http
+        || std::env::var("HWVAULT_ALLOW_INSECURE_SECOND_FACTOR_HTTP")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+    if !allow_insecure && !base.to_lowercase().starts_with("https://") {
+        return Err("second-factor HTTP backend must use https".to_string());
+    }
+
     let bearer = std::env::var("HWVAULT_SECOND_FACTOR_HTTP_BEARER")
         .map_err(|_| "HWVAULT_SECOND_FACTOR_HTTP_BEARER not configured".to_string())?;
 
@@ -403,7 +441,7 @@ fn chain_hash(prev_hash: &str, payload: &str) -> String {
 
 fn append_audit(action: &str, id: &str, decision: &str, detail: &str) {
     let dir = state_dir();
-    if fs::create_dir_all(&dir).is_err() {
+    if ensure_private_dir(&dir).is_err() {
         return;
     }
     let chain_path = dir.join("openclaw-audit.chain");
@@ -429,11 +467,11 @@ fn append_audit(action: &str, id: &str, decision: &str, detail: &str) {
     };
 
     if let Ok(line) = serde_json::to_string(&event) {
-        let _ = fs::write(
-            &log_path,
-            format!("{}{}", fs::read_to_string(&log_path).unwrap_or_default(), line + "\n"),
-        );
-        let _ = fs::write(chain_path, hash);
+        // Append-only write to reduce race/loss risk.
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            let _ = writeln!(f, "{line}");
+        }
+        let _ = write_private_file(&chain_path, hash.as_bytes());
     }
 }
 
@@ -500,25 +538,22 @@ fn load_or_create_signing_key() -> Result<String, String> {
         return Ok(key);
     }
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("state dir create failed: {e}"))?;
-    }
-    fs::write(&path, &key).map_err(|e| format!("key write failed: {e}"))?;
+    write_private_file(&path, key.as_bytes()).map_err(|e| format!("key write failed: {e}"))?;
     Ok(key)
 }
 
-fn sign_payload(signing_key: &str, payload_b64: &str) -> String {
-    let mut h = Sha256::new();
-    h.update(signing_key.as_bytes());
-    h.update(b".");
-    h.update(payload_b64.as_bytes());
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(h.finalize())
+fn sign_payload(signing_key: &str, payload_b64: &str) -> Result<String, String> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(signing_key.as_bytes())
+        .map_err(|e| format!("hmac init failed: {e}"))?;
+    mac.update(payload_b64.as_bytes());
+    let sig = mac.finalize().into_bytes();
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig))
 }
 
 fn encode_token(claims: &DelegationClaims, signing_key: &str) -> Result<String, String> {
     let payload = serde_json::to_vec(claims).map_err(|e| format!("claims encode failed: {e}"))?;
     let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
-    let sig = sign_payload(signing_key, &payload_b64);
+    let sig = sign_payload(signing_key, &payload_b64)?;
     Ok(format!("ocst.{payload_b64}.{sig}"))
 }
 
@@ -537,7 +572,7 @@ fn decode_and_verify_token(token: &str, signing_key: &str) -> Result<DelegationC
         return Err("invalid token format".to_string());
     }
 
-    let expected = sign_payload(signing_key, payload_b64);
+    let expected = sign_payload(signing_key, payload_b64)?;
     if expected != sig {
         return Err("invalid token signature".to_string());
     }
@@ -562,11 +597,8 @@ fn load_delegation_state() -> DelegationState {
 
 fn save_delegation_state(state: &DelegationState) -> Result<(), String> {
     let p = delegation_state_path();
-    if let Some(parent) = p.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("state dir create failed: {e}"))?;
-    }
     let body = serde_json::to_vec_pretty(state).map_err(|e| format!("state encode failed: {e}"))?;
-    fs::write(p, body).map_err(|e| format!("state write failed: {e}"))
+    write_private_file(&p, &body).map_err(|e| format!("state write failed: {e}"))
 }
 
 fn random_id() -> String {
