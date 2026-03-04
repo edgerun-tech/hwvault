@@ -6,7 +6,8 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread::sleep;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +55,12 @@ struct Policy {
     /// Command executed for second-factor approval. Exit 0 => approved.
     #[serde(default)]
     second_factor_command: Option<String>,
+    /// Base URL for HTTP second-factor backend (e.g. https://2fa.example.com).
+    #[serde(default)]
+    second_factor_http_url: Option<String>,
+    /// Poll timeout for HTTP second-factor backend.
+    #[serde(default)]
+    second_factor_timeout_seconds: Option<u64>,
     /// Default TTL when a hardware trust root is present.
     #[serde(default)]
     default_ttl_seconds: Option<u64>,
@@ -288,6 +295,78 @@ fn run_second_factor_command(policy: &Policy, action: &str, id: &str) -> Result<
     }
 }
 
+fn run_second_factor_http(policy: &Policy, action: &str, id: &str) -> Result<(), String> {
+    let base = policy
+        .second_factor_http_url
+        .clone()
+        .or_else(|| std::env::var("HWVAULT_SECOND_FACTOR_HTTP_URL").ok())
+        .ok_or_else(|| "second_factor_http_url not configured".to_string())?;
+
+    let bearer = std::env::var("HWVAULT_SECOND_FACTOR_HTTP_BEARER")
+        .map_err(|_| "HWVAULT_SECOND_FACTOR_HTTP_BEARER not configured".to_string())?;
+
+    let timeout_seconds = policy.second_factor_timeout_seconds.unwrap_or(90).clamp(5, 300);
+    let request_id = random_id();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("http client build failed: {e}"))?;
+
+    let create_url = format!("{}/v1/approvals", base.trim_end_matches('/'));
+    let payload = serde_json::json!({
+        "requestId": request_id,
+        "action": action,
+        "secretId": id,
+        "ts": now_unix(),
+    });
+
+    let create_resp = client
+        .post(create_url)
+        .bearer_auth(&bearer)
+        .json(&payload)
+        .send()
+        .map_err(|e| format!("second-factor create request failed: {e}"))?;
+
+    if !create_resp.status().is_success() {
+        return Err(format!(
+            "second-factor create request rejected ({})",
+            create_resp.status()
+        ));
+    }
+
+    let poll_url = format!(
+        "{}/v1/approvals/{}",
+        base.trim_end_matches('/'),
+        request_id
+    );
+    let started = now_unix();
+    loop {
+        if now_unix().saturating_sub(started) > timeout_seconds {
+            return Err("second-factor approval timed out".to_string());
+        }
+        let poll_resp = client
+            .get(&poll_url)
+            .bearer_auth(&bearer)
+            .send()
+            .map_err(|e| format!("second-factor poll failed: {e}"))?;
+        if !poll_resp.status().is_success() {
+            return Err(format!("second-factor poll rejected ({})", poll_resp.status()));
+        }
+        let body: serde_json::Value = poll_resp
+            .json()
+            .map_err(|e| format!("second-factor poll decode failed: {e}"))?;
+        match body
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("pending")
+        {
+            "approved" => return Ok(()),
+            "denied" => return Err("second-factor denied".to_string()),
+            _ => sleep(Duration::from_secs(2)),
+        }
+    }
+}
+
 fn enforce_second_factor(policy: &Policy, action: &str, id: &str) -> Result<(), String> {
     if !requires_second_factor(policy, id) {
         return Ok(());
@@ -299,6 +378,7 @@ fn enforce_second_factor(policy: &Policy, action: &str, id: &str) -> Result<(), 
         .to_lowercase();
     match method.as_str() {
         "command" => run_second_factor_command(policy, action, id),
+        "http" => run_second_factor_http(policy, action, id),
         _ => Err(format!("unsupported second-factor method: {method}")),
     }
 }

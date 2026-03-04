@@ -12,8 +12,9 @@
   "requirePresenceForIds": [
     "github-token-readonly"
   ],
-  "secondFactorMethod": "command",
-  "secondFactorCommand": "/usr/local/bin/hwvault-second-factor-approve",
+  "secondFactorMethod": "http",
+  "secondFactorHttpUrl": "https://2fa.example.com",
+  "secondFactorTimeoutSeconds": 90,
   "requireSecondFactorForIds": [
     "github-token-readonly"
   ],

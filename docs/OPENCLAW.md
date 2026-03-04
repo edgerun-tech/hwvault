@@ -115,9 +115,29 @@ Behavior:
 - Optional override command for presence checks:
   - `HWVAULT_PRESENCE_CMD="..."`
 - Sensitive ids can also require a second factor from another device:
-  - `secondFactorMethod`: `command`
-  - `secondFactorCommand`: `/usr/local/bin/hwvault-second-factor-approve`
+  - `secondFactorMethod`: `http` (recommended)
+  - `secondFactorHttpUrl`: `https://2fa.example.com`
+  - `secondFactorTimeoutSeconds`: `90`
   - `requireSecondFactorForIds`: `["secret-id"]`
+
+HTTP backend contract:
+
+- Resolver `POST`s approval request to: `POST {baseUrl}/v1/approvals`
+- Resolver polls status at: `GET {baseUrl}/v1/approvals/{requestId}`
+- Auth via env: `HWVAULT_SECOND_FACTOR_HTTP_BEARER`
+
+Status response must contain:
+
+- `{ "status": "pending" | "approved" | "denied" }`
+
+Demo backend reference:
+
+- `scripts/hardware/hwvault-2fa-http-backend.example.py`
+
+Alternative local hook method still supported:
+
+- `secondFactorMethod`: `command`
+- `secondFactorCommand`: `/usr/local/bin/hwvault-second-factor-approve`
 
 `secondFactorCommand` receives env vars:
 
