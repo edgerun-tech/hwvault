@@ -565,17 +565,22 @@ fn decode_and_verify_token(token: &str, signing_key: &str) -> Result<DelegationC
     let Some(payload_b64) = parts.next() else {
         return Err("invalid token format".to_string());
     };
-    let Some(sig) = parts.next() else {
+    let Some(sig_b64) = parts.next() else {
         return Err("invalid token format".to_string());
     };
     if parts.next().is_some() || prefix != "ocst" {
         return Err("invalid token format".to_string());
     }
 
-    let expected = sign_payload(signing_key, payload_b64)?;
-    if expected != sig {
-        return Err("invalid token signature".to_string());
-    }
+    let sig = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(sig_b64)
+        .map_err(|_| "invalid token signature".to_string())?;
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(signing_key.as_bytes())
+        .map_err(|e| format!("hmac init failed: {e}"))?;
+    mac.update(payload_b64.as_bytes());
+    mac.verify_slice(&sig)
+        .map_err(|_| "invalid token signature".to_string())?;
 
     let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload_b64)
