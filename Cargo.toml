@@ -1,0 +1,25 @@
+[package]
+name = "hwvault"
+version = "0.1.0"
+edition = "2024"
+description = "TPM-backed credential vault - create, store, transport credentials securely"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+tss-esapi = "7.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+zeroize = { version = "1.8", features = ["derive"] }
+rand = "0.8"
+base64 = "0.21"
+sha2 = "0.10"
+hex = "0.4"
+getrandom = "0.3"
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[[bin]]
+name = "openclaw-hwvault-resolver"
+path = "src/bin/openclaw_hwvault_resolver.rs"

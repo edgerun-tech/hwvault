@@ -1,0 +1,22 @@
+{
+  "acceptedRoots": ["tpm", "yubikey"],
+  "allowedIds": [
+    "openai-api-key",
+    "anthropic-api-key",
+    "github-token-readonly"
+  ],
+  "requiredRootsById": {
+    "github-token-readonly": ["yubikey"]
+  },
+  "presenceMethod": "fingerprint",
+  "requirePresenceForIds": [
+    "github-token-readonly"
+  ],
+  "secondFactorMethod": "command",
+  "secondFactorCommand": "/usr/local/bin/hwvault-second-factor-approve",
+  "requireSecondFactorForIds": [
+    "github-token-readonly"
+  ],
+  "defaultTtlSeconds": 120,
+  "nonHardwareMaxTtlSeconds": 30
+}
